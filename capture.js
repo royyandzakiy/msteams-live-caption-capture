@@ -1,26 +1,39 @@
 // Store messages with their unique IDs to prevent duplicates
-let capturedMessages = new Map(); // uniqueId -> { author, text, timestamp }
+let capturedMessages = new Map(); // uniqueId -> { author, text, firstSeen, lastUpdated }
 let processedIds = new Set(); // Track which IDs we've already finalized
+
+// Interval IDs
+let captureIntervalId = null;
+let finalizeIntervalId = null;
+let cleanupIntervalId = null;
+
+// State
+let isRunning = true;
+let captureIntervalMs = 10000; // default 10 seconds
 
 function normalize(text) {
     return text.replace(/\s+/g, " ").trim();
 }
 
+function formatTimestamp(timestamp) {
+    const date = new Date(timestamp);
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+    return `[${hours}:${minutes}:${seconds}]`;
+}
+
 function getUniqueId(container) {
-    // Try to get a unique ID from the avatar element
     const avatarSpan = container.querySelector('span[id^="avatar-"]');
     if (avatarSpan) return avatarSpan.id;
     
-    // Fallback: use a combination of author and position
     const author = container.querySelector('[data-tid="author"]')?.textContent || 'unknown';
     const textEl = container.querySelector('[data-tid="closed-caption-text"]');
     if (textEl) {
-        // Create a simple hash of the element's position in DOM
         const rect = textEl.getBoundingClientRect();
         return `${author}-${rect.top}-${rect.left}`;
     }
     
-    // Last resort: use the container itself as reference
     return `container-${Array.from(document.querySelectorAll('.fui-ChatMessageCompact')).indexOf(container)}`;
 }
 
@@ -44,15 +57,20 @@ function captureCurrentState() {
         if (!text) return;
         
         const uniqueId = getUniqueId(container);
+        const existing = capturedMessages.get(uniqueId);
         
-        // Store or update this message
-        capturedMessages.set(uniqueId, {
-            author,
-            text,
-            timestamp: now,
-            container: container,
-            uniqueId: uniqueId
-        });
+        if (existing) {
+            existing.text = text;
+            existing.lastUpdated = now;
+        } else {
+            capturedMessages.set(uniqueId, {
+                author,
+                text,
+                firstSeen: now,
+                lastUpdated: now,
+                uniqueId: uniqueId
+            });
+        }
     });
 }
 
@@ -61,31 +79,23 @@ function finalizeCompleteMessages() {
     const messagesToFinalize = [];
     
     capturedMessages.forEach((data, id) => {
-        const { author, text, timestamp } = data;
+        const { author, text, firstSeen, lastUpdated } = data;
         
-        // Skip if already processed
         if (processedIds.has(id)) return;
         
-        // Check if message is complete and stable (no updates for 3 seconds)
-        const isStable = (now - timestamp) > 3000;
+        const isStable = (now - lastUpdated) > 3000;
         const isCompleteMessage = isComplete(text);
         
         if (isStable && isCompleteMessage) {
-            messagesToFinalize.push({ id, author, text });
+            messagesToFinalize.push({ id, author, text, timestamp: firstSeen });
             processedIds.add(id);
         }
     });
     
-    // Sort by timestamp to maintain order
-    messagesToFinalize.sort((a, b) => {
-        const msgA = capturedMessages.get(a.id);
-        const msgB = capturedMessages.get(b.id);
-        return msgA.timestamp - msgB.timestamp;
-    });
+    messagesToFinalize.sort((a, b) => a.timestamp - b.timestamp);
     
-    // Output finalized messages
     messagesToFinalize.forEach(msg => {
-        console.log(`${msg.author}\n${msg.text}`);
+        console.log(`${formatTimestamp(msg.timestamp)} ${msg.author}\n${msg.text}`);
     });
     
     return messagesToFinalize;
@@ -94,11 +104,15 @@ function finalizeCompleteMessages() {
 function getAllFinalizedMessages() {
     const finalized = [];
     const sortedEntries = Array.from(capturedMessages.entries())
-        .sort((a, b) => a[1].timestamp - b[1].timestamp);
+        .sort((a, b) => a[1].firstSeen - b[1].firstSeen);
     
     sortedEntries.forEach(([id, data]) => {
         if (processedIds.has(id) && isComplete(data.text)) {
-            finalized.push({ author: data.author, text: data.text });
+            finalized.push({ 
+                author: data.author, 
+                text: data.text,
+                timestamp: data.firstSeen
+            });
         }
     });
     
@@ -106,18 +120,15 @@ function getAllFinalizedMessages() {
 }
 
 function downloadFile() {
-    // Force finalize any complete messages that haven't been processed yet
-    const now = Date.now();
     capturedMessages.forEach((data, id) => {
         if (!processedIds.has(id) && isComplete(data.text)) {
             processedIds.add(id);
-            console.log(`${data.author}\n${data.text}`);
+            console.log(`${formatTimestamp(data.firstSeen)} ${data.author}\n${data.text}`);
         }
     });
     
     const finalized = getAllFinalizedMessages();
     
-    // Deduplicate consecutive identical messages from same author
     const deduped = [];
     finalized.forEach(msg => {
         const last = deduped[deduped.length - 1];
@@ -127,16 +138,16 @@ function downloadFile() {
     });
     
     const content = deduped
-        .map(msg => `${msg.author}\n${msg.text}`)
+        .map(msg => `${formatTimestamp(msg.timestamp)} ${msg.author}\n${msg.text}`)
         .join('\n\n');
     
     const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    const fileTimestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `teams_captions_${timestamp}.txt`;
+    a.download = `teams_captions_${fileTimestamp}.txt`;
     a.click();
     
     URL.revokeObjectURL(url);
@@ -151,37 +162,77 @@ function clearCaptions() {
 }
 
 function cleanupOldMessages() {
-    // Remove messages older than 30 minutes to prevent memory bloat
     const now = Date.now();
-    const maxAge = 30 * 60 * 1000; // 30 minutes
+    const maxAge = 30 * 60 * 1000;
     
     capturedMessages.forEach((data, id) => {
-        if (now - data.timestamp > maxAge) {
+        if (now - data.lastUpdated > maxAge) {
             capturedMessages.delete(id);
             processedIds.delete(id);
         }
     });
 }
 
-// Capture state every 10 seconds
-setInterval(() => {
-    captureCurrentState();
-}, 10000);
+// Start/stop functions
+function startCapture(intervalMs) {
+    if (captureIntervalId) clearInterval(captureIntervalId);
+    if (finalizeIntervalId) clearInterval(finalizeIntervalId);
+    if (cleanupIntervalId) clearInterval(cleanupIntervalId);
+    
+    captureIntervalId = setInterval(() => captureCurrentState(), intervalMs);
+    finalizeIntervalId = setInterval(() => finalizeCompleteMessages(), 5000);
+    cleanupIntervalId = setInterval(() => cleanupOldMessages(), 60000);
+    
+    isRunning = true;
+    console.log(`Capture started with ${intervalMs}ms interval`);
+}
 
-// Finalize complete messages every 5 seconds
-setInterval(() => {
-    finalizeCompleteMessages();
-}, 5000);
+function stopCapture() {
+    if (captureIntervalId) clearInterval(captureIntervalId);
+    if (finalizeIntervalId) clearInterval(finalizeIntervalId);
+    if (cleanupIntervalId) clearInterval(cleanupIntervalId);
+    
+    captureIntervalId = null;
+    finalizeIntervalId = null;
+    cleanupIntervalId = null;
+    
+    isRunning = false;
+    console.log('Capture stopped');
+}
 
-// Cleanup old messages every minute
-setInterval(() => {
-    cleanupOldMessages();
-}, 60000);
-
-// Initial capture
-setTimeout(() => {
-    captureCurrentState();
-}, 1000);
+// Message listener for popup
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    switch (request.action) {
+        case 'getState':
+            sendResponse({
+                isRunning,
+                messageCount: capturedMessages.size,
+                processedCount: processedIds.size
+            });
+            break;
+        case 'start':
+            startCapture(request.interval || captureIntervalMs);
+            sendResponse({ success: true });
+            break;
+        case 'stop':
+            stopCapture();
+            sendResponse({ success: true });
+            break;
+        case 'captureNow':
+            captureCurrentState();
+            sendResponse({ success: true });
+            break;
+        case 'clear':
+            clearCaptions();
+            sendResponse({ success: true });
+            break;
+        case 'download':
+            downloadFile();
+            sendResponse({ success: true });
+            break;
+    }
+    return true;
+});
 
 // Keyboard shortcuts
 document.addEventListener('keydown', (e) => {
@@ -191,12 +242,20 @@ document.addEventListener('keydown', (e) => {
     if (e.altKey && e.key.toLowerCase() === 'c') {
         clearCaptions();
     }
-    // Alt+S to force a capture now
     if (e.altKey && e.key.toLowerCase() === 's') {
         captureCurrentState();
         console.log('Manual capture triggered');
     }
 });
 
-console.log('Teams Caption Extractor loaded.');
+// Load saved interval and start
+chrome.storage.local.get(['captureInterval'], (result) => {
+    if (result.captureInterval) {
+        captureIntervalMs = result.captureInterval;
+    }
+    startCapture(captureIntervalMs);
+    setTimeout(() => captureCurrentState(), 1000);
+});
+
+console.log('Teams Live Caption Capture loaded.');
 console.log('Press Alt+D to download, Alt+C to clear, Alt+S to force capture');
