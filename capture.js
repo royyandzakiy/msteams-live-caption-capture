@@ -1,11 +1,14 @@
 // Store messages with their unique IDs to prevent duplicates
 let capturedMessages = new Map(); // uniqueId -> { author, text, firstSeen, lastUpdated }
 let processedIds = new Set(); // Track which IDs we've already finalized
+let captionsPresent = false;
+let autoDownloadTriggered = false;
 
 // Interval IDs
 let captureIntervalId = null;
 let finalizeIntervalId = null;
 let cleanupIntervalId = null;
+let monitorIntervalId = null;
 
 // State
 let isRunning = true;
@@ -24,21 +27,31 @@ function formatTimestamp(timestamp) {
 }
 
 function getUniqueId(container) {
+    // Try to get a unique ID from the avatar element
     const avatarSpan = container.querySelector('span[id^="avatar-"]');
     if (avatarSpan) return avatarSpan.id;
     
+    // Fallback: use a combination of author and position
     const author = container.querySelector('[data-tid="author"]')?.textContent || 'unknown';
     const textEl = container.querySelector('[data-tid="closed-caption-text"]');
     if (textEl) {
+        // Create a simple hash of the element's position in DOM
         const rect = textEl.getBoundingClientRect();
         return `${author}-${rect.top}-${rect.left}`;
     }
     
+    // Last resort: use the container itself as reference
     return `container-${Array.from(document.querySelectorAll('.fui-ChatMessageCompact')).indexOf(container)}`;
 }
 
 function isComplete(text) {
     return /[.!?]$/.test(text) && text.length > 2;
+}
+
+function checkCaptionsPresence() {
+    const captionsWindow = document.querySelector('[data-tid="closed-caption-v2-window-wrapper"]');
+    const captionTexts = document.querySelectorAll('[data-tid="closed-caption-text"]');
+    return captionsWindow !== null && captionTexts.length > 0;
 }
 
 function captureCurrentState() {
@@ -57,12 +70,15 @@ function captureCurrentState() {
         if (!text) return;
         
         const uniqueId = getUniqueId(container);
+        
         const existing = capturedMessages.get(uniqueId);
         
         if (existing) {
+            // Update text but keep original firstSeen timestamp
             existing.text = text;
             existing.lastUpdated = now;
         } else {
+            // New message - store with firstSeen timestamp
             capturedMessages.set(uniqueId, {
                 author,
                 text,
@@ -81,19 +97,28 @@ function finalizeCompleteMessages() {
     capturedMessages.forEach((data, id) => {
         const { author, text, firstSeen, lastUpdated } = data;
         
+        // Skip if already processed
         if (processedIds.has(id)) return;
         
+        // Check if message is complete and stable (no updates for 3 seconds)
         const isStable = (now - lastUpdated) > 3000;
         const isCompleteMessage = isComplete(text);
         
         if (isStable && isCompleteMessage) {
-            messagesToFinalize.push({ id, author, text, timestamp: firstSeen });
+            messagesToFinalize.push({ 
+                id, 
+                author, 
+                text, 
+                timestamp: firstSeen 
+            });
             processedIds.add(id);
         }
     });
     
+    // Sort by timestamp to maintain order
     messagesToFinalize.sort((a, b) => a.timestamp - b.timestamp);
     
+    // Output finalized messages
     messagesToFinalize.forEach(msg => {
         console.log(`${formatTimestamp(msg.timestamp)} ${msg.author}\n${msg.text}`);
     });
@@ -119,7 +144,8 @@ function getAllFinalizedMessages() {
     return finalized;
 }
 
-function downloadFile() {
+function downloadFile(isAutoDownload = false) {
+    // Force finalize any complete messages that haven't been processed yet
     capturedMessages.forEach((data, id) => {
         if (!processedIds.has(id) && isComplete(data.text)) {
             processedIds.add(id);
@@ -129,6 +155,7 @@ function downloadFile() {
     
     const finalized = getAllFinalizedMessages();
     
+    // Deduplicate consecutive identical messages from same author
     const deduped = [];
     finalized.forEach(msg => {
         const last = deduped[deduped.length - 1];
@@ -136,6 +163,11 @@ function downloadFile() {
             deduped.push(msg);
         }
     });
+    
+    if (deduped.length === 0) {
+        console.log('No captions to download');
+        return;
+    }
     
     const content = deduped
         .map(msg => `${formatTimestamp(msg.timestamp)} ${msg.author}\n${msg.text}`)
@@ -145,14 +177,21 @@ function downloadFile() {
     const url = URL.createObjectURL(blob);
     
     const fileTimestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    const prefix = isAutoDownload ? 'auto_' : '';
     const a = document.createElement('a');
     a.href = url;
-    a.download = `teams_captions_${fileTimestamp}.txt`;
+    a.download = `${prefix}teams_captions_${fileTimestamp}.txt`;
     a.click();
     
     URL.revokeObjectURL(url);
     
-    console.log(`Downloaded ${deduped.length} captions`);
+    console.log(`${isAutoDownload ? 'Auto-d' : 'D'}ownloaded ${deduped.length} captions`);
+    
+    // Clear captions after download if it was auto-download
+    if (isAutoDownload) {
+        clearCaptions();
+        autoDownloadTriggered = true;
+    }
 }
 
 function clearCaptions() {
@@ -162,8 +201,9 @@ function clearCaptions() {
 }
 
 function cleanupOldMessages() {
+    // Remove messages older than 30 minutes to prevent memory bloat
     const now = Date.now();
-    const maxAge = 30 * 60 * 1000;
+    const maxAge = 30 * 60 * 1000; // 30 minutes
     
     capturedMessages.forEach((data, id) => {
         if (now - data.lastUpdated > maxAge) {
@@ -173,19 +213,21 @@ function cleanupOldMessages() {
     });
 }
 
-// Check if live captions are present
-function checkCaptionsPresent() {
-    const containers = document.querySelectorAll('.fui-ChatMessageCompact');
-    const captionElements = document.querySelectorAll('[data-tid="closed-caption-text"]');
+function monitorCaptionsPresence() {
+    const wasPresent = captionsPresent;
+    captionsPresent = checkCaptionsPresence();
     
-    // Also check for the closed caption window wrapper
-    const captionWindow = document.querySelector('[data-tid="closed-caption-v2-window-wrapper"]');
+    // If captions were present but now disappeared, meeting likely ended
+    if (wasPresent && !captionsPresent && !autoDownloadTriggered) {
+        console.log('Captions disappeared - meeting may have ended. Auto-downloading...');
+        downloadFile(true);
+    }
     
-    return {
-        hasCaptions: captionElements.length > 0 || captionWindow !== null,
-        captionCount: captionElements.length,
-        containerCount: containers.length
-    };
+    // Reset auto-download trigger when captions appear again (new meeting)
+    if (captionsPresent && autoDownloadTriggered) {
+        autoDownloadTriggered = false;
+        console.log('New meeting detected - ready to capture');
+    }
 }
 
 // Start/stop functions
@@ -193,10 +235,12 @@ function startCapture(intervalMs) {
     if (captureIntervalId) clearInterval(captureIntervalId);
     if (finalizeIntervalId) clearInterval(finalizeIntervalId);
     if (cleanupIntervalId) clearInterval(cleanupIntervalId);
+    if (monitorIntervalId) clearInterval(monitorIntervalId);
     
     captureIntervalId = setInterval(() => captureCurrentState(), intervalMs);
     finalizeIntervalId = setInterval(() => finalizeCompleteMessages(), 5000);
     cleanupIntervalId = setInterval(() => cleanupOldMessages(), 60000);
+    monitorIntervalId = setInterval(() => monitorCaptionsPresence(), 3000);
     
     isRunning = true;
     console.log(`Capture started with ${intervalMs}ms interval`);
@@ -206,10 +250,12 @@ function stopCapture() {
     if (captureIntervalId) clearInterval(captureIntervalId);
     if (finalizeIntervalId) clearInterval(finalizeIntervalId);
     if (cleanupIntervalId) clearInterval(cleanupIntervalId);
+    if (monitorIntervalId) clearInterval(monitorIntervalId);
     
     captureIntervalId = null;
     finalizeIntervalId = null;
     cleanupIntervalId = null;
+    monitorIntervalId = null;
     
     isRunning = false;
     console.log('Capture stopped');
@@ -222,11 +268,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             sendResponse({
                 isRunning,
                 messageCount: capturedMessages.size,
-                processedCount: processedIds.size
+                processedCount: processedIds.size,
+                captionsPresent: checkCaptionsPresence()
             });
             break;
         case 'checkCaptions':
-            sendResponse(checkCaptionsPresent());
+            const present = checkCaptionsPresence();
+            sendResponse({
+                hasCaptions: present,
+                captionCount: document.querySelectorAll('[data-tid="closed-caption-text"]').length,
+                containerCount: document.querySelectorAll('.fui-ChatMessageCompact').length
+            });
             break;
         case 'start':
             startCapture(request.interval || captureIntervalMs);
@@ -245,7 +297,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             sendResponse({ success: true });
             break;
         case 'download':
-            downloadFile();
+            downloadFile(false);
             sendResponse({ success: true });
             break;
     }
@@ -255,14 +307,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 // Keyboard shortcuts
 document.addEventListener('keydown', (e) => {
     if (e.altKey && e.key.toLowerCase() === 'd') {
-        downloadFile();
+        downloadFile(false);
     }
     if (e.altKey && e.key.toLowerCase() === 'c') {
         clearCaptions();
     }
+    // Alt+S to force a capture now
     if (e.altKey && e.key.toLowerCase() === 's') {
         captureCurrentState();
         console.log('Manual capture triggered');
+    }
+    // Alt+R to reset auto-download flag (for testing)
+    if (e.altKey && e.key.toLowerCase() === 'r') {
+        autoDownloadTriggered = false;
+        console.log('Auto-download flag reset');
     }
 });
 
@@ -272,8 +330,13 @@ chrome.storage.local.get(['captureInterval'], (result) => {
         captureIntervalMs = result.captureInterval;
     }
     startCapture(captureIntervalMs);
-    setTimeout(() => captureCurrentState(), 1000);
+    setTimeout(() => {
+        captureCurrentState();
+        captionsPresent = checkCaptionsPresence();
+        console.log(`Captions ${captionsPresent ? 'detected' : 'not detected'}`);
+    }, 1000);
 });
 
-console.log('Teams Live Caption Capture loaded.');
+console.log('Teams Caption Extractor loaded.');
 console.log('Press Alt+D to download, Alt+C to clear, Alt+S to force capture');
+console.log('Auto-download enabled - will trigger when meeting ends');
