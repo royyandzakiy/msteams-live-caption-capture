@@ -173,6 +173,21 @@ function cleanupOldMessages() {
     });
 }
 
+// Check if live captions are present
+function checkCaptionsPresent() {
+    const containers = document.querySelectorAll('.fui-ChatMessageCompact');
+    const captionElements = document.querySelectorAll('[data-tid="closed-caption-text"]');
+    
+    // Also check for the closed caption window wrapper
+    const captionWindow = document.querySelector('[data-tid="closed-caption-v2-window-wrapper"]');
+    
+    return {
+        hasCaptions: captionElements.length > 0 || captionWindow !== null,
+        captionCount: captionElements.length,
+        containerCount: containers.length
+    };
+}
+
 // Start/stop functions
 function startCapture(intervalMs) {
     if (captureIntervalId) clearInterval(captureIntervalId);
@@ -209,6 +224,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 messageCount: capturedMessages.size,
                 processedCount: processedIds.size
             });
+            break;
+        case 'checkCaptions':
+            sendResponse(checkCaptionsPresent());
             break;
         case 'start':
             startCapture(request.interval || captureIntervalMs);
