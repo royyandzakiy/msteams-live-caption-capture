@@ -23,5 +23,10 @@
   "action": {
     "default_popup": "popup.html",
     "default_title": "Teams Live Caption Capture"
+  },
+  "icons": {
+    "32": "img/icon32.png",
+    "48": "img/icon48.png",
+    "128": "img/icon128.png"
   }
 }

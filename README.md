@@ -64,6 +64,6 @@ Click **Download Transcript** to generate a `.txt` file. The format is as follow
 
 ## Screenshots
 
-![alt text](docs/chrome-extension.png)
-![alt text](docs/activating-live-captions.png)
-![alt text](docs/downloaded-captions.png)
+![alt text](img/chrome-extension.png)
+![alt text](img/activating-live-captions.png)
+![alt text](img/downloaded-captions.png)
