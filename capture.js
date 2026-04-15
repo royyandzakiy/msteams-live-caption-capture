@@ -1,27 +1,37 @@
-// Track what we've already saved to avoid duplicates
-let savedHashes = new Set();
+// capture.js
 
-const observer = new MutationObserver(() => {
+let lastPrinted = new Set();
+
+function getTimestamp() {
+    return new Date().toLocaleTimeString();
+}
+
+function captureCaptions() {
     const elements = document.querySelectorAll('[data-tid="closed-caption-text"]');
+    const current = new Set();
+
     elements.forEach(el => {
-        const text = el.textContent;
-        const author = el.closest('.fui-ChatMessageCompact')?.querySelector('[data-tid="author"]')?.textContent || 'Unknown';
-        const timestamp = new Date().toLocaleTimeString();
-        
-        // Create a unique hash for this caption
-        const hash = `${timestamp}-${text}`;
-        
-        if (!savedHashes.has(hash)) {
-            savedHashes.add(hash);
-            
-            // Get existing captions, add new one, save back
-            chrome.storage.local.get(['captions'], (result) => {
-                const existing = result.captions || [];
-                existing.push({ author, text, timestamp });
-                chrome.storage.local.set({ captions: existing });
-            });
+        const text = el.textContent?.trim();
+        if (!text) return;
+
+        const author = el
+            .closest('.fui-ChatMessageCompact')
+            ?.querySelector('[data-tid="author"]')
+            ?.textContent || 'Unknown';
+
+        const key = `${author}:${text}`;
+        current.add(key);
+
+        // Only print if NOT seen in previous cycle
+        if (!lastPrinted.has(key)) {
+            const timestamp = getTimestamp();
+            console.log(`[${timestamp}] ${author}: ${text}`);
         }
     });
-});
 
-observer.observe(document.body, { childList: true, subtree: true });
+    // Replace previous snapshot (NOT accumulate forever)
+    lastPrinted = current;
+}
+
+// Poll faster for smoother capture
+setInterval(captureCaptions, 500);
