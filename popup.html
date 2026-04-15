@@ -1,0 +1,32 @@
+<button id="export">Export Captions Test</button>
+<pre id="output"></pre>
+<script>
+    document.getElementById('export').onclick = () => {
+        console.log("export clicked!")
+        chrome.storage.local.get(['captions'], (result) => {
+            console.log('Raw data:', result); // Check console for errors
+            
+            if (!result.captions || result.captions.length === 0) {
+                document.getElementById('output').textContent = 'No captions captured yet!';
+                return;
+            }
+            
+            const text = result.captions.map(c => 
+                `[${c.timestamp}] ${c.author}: ${c.text}`
+            ).join('\n');
+            
+            // Also show in popup so you can see it
+            document.getElementById('output').textContent = text;
+            
+            const blob = new Blob([text], {type: 'text/plain'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `teams-captions-${Date.now()}.txt`;
+            document.body.appendChild(a); // Must add to DOM
+            a.click();
+            document.body.removeChild(a); // Clean up
+            URL.revokeObjectURL(url); // Clean up
+        });
+    };
+</script>

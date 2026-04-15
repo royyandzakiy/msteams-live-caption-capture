@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Teams Caption Saver",
+  "version": "1.0",
+  "permissions": ["storage"],
+  "host_permissions": ["https://teams.microsoft.com/*"],
+  "content_scripts": [{
+    "matches": ["https://teams.microsoft.com/*"],
+    "js": ["capture.js"]
+  }],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
