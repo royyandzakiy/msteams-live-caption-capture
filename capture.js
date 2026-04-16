@@ -49,7 +49,7 @@ function isComplete(text) {
 }
 
 function checkCaptionsPresence() {
-    const captionsWindow = document.querySelector('[data-tid="closed-caption-v2-window-wrapper"]');
+    const captionsWindow = document.querySelector('[data-tid="closed-caption-renderer-wrapper"]');
     const captionTexts = document.querySelectorAll('[data-tid="closed-caption-text"]');
     return captionsWindow !== null && captionTexts.length > 0;
 }
