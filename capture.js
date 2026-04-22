@@ -239,7 +239,7 @@ function startCapture(intervalMs) {
     
     captureIntervalId = setInterval(() => captureCurrentState(), intervalMs);
     finalizeIntervalId = setInterval(() => finalizeCompleteMessages(), 5000);
-    cleanupIntervalId = setInterval(() => cleanupOldMessages(), 60000);
+    // cleanupIntervalId = setInterval(() => cleanupOldMessages(), 60000);
     monitorIntervalId = setInterval(() => monitorCaptionsPresence(), 3000);
     
     isRunning = true;
