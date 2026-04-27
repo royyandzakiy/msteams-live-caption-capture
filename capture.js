@@ -347,6 +347,59 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
 });
 
+function handleTabClose() {
+    console.log('Tab is closing - checking for captions to download...');
+    
+    // Check if we have any captured messages
+    if (capturedMessages.size > 0) {
+        // Force finalize any complete messages
+        capturedMessages.forEach((data, id) => {
+            if (!processedIds.has(id) && isComplete(data.text)) {
+                processedIds.add(id);
+            }
+        });
+        
+        const finalized = getAllFinalizedMessages();
+        
+        if (finalized.length > 0) {
+            console.log(`Tab closing with ${finalized.length} captions - downloading...`);
+            downloadFile(true); // This will also clear captions
+        
+            // Note: downloadFile() is async, but the browser will usually complete it
+            // before the tab closes. If you want to be safer, you can use synchronous
+            // confirmation but it's not recommended for UX.
+        } else {
+            console.log('No complete captions to download');
+        }
+    } else {
+        console.log('No captions captured to download');
+    }
+}
+
+window.addEventListener('beforeunload', (e) => {
+    handleTabClose();
+    
+    if (capturedMessages.size > 0 && getAllFinalizedMessages().length > 0) {
+        e.preventDefault();
+        e.returnValue = 'You have unsaved captions. They will be downloaded automatically.';
+        return e.returnValue;
+    }
+});
+
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        console.log('Tab hidden - monitoring for potential meeting end');
+    } else {
+        console.log('Tab visible again');
+        setTimeout(() => {
+            if (!checkCaptionsPresence() && capturedMessages.size > 0 && !autoDownloadTriggered) {
+                console.log('Captions missing after tab became visible - auto-downloading...');
+                downloadFile(true);
+            }
+        }, 1000);
+    }
+});
+
 // Keyboard shortcuts
 document.addEventListener('keydown', (e) => {
     if (e.altKey && e.key.toLowerCase() === 'd') {
