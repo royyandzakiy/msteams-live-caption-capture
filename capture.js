@@ -144,6 +144,36 @@ function getAllFinalizedMessages() {
     return finalized;
 }
 
+function getMeetingName() {
+    try {
+        const title = document.title;
+        // Pattern matches: anything between "|" and "| Microsoft Teams"
+        // Handles formats like:
+        // - "Chat | Meeting Name | Microsoft Teams"
+        // - "Meeting Name | Microsoft Teams"
+        const match = title.match(/\|\s*([^|]+?)\s*\|\s*Microsoft Teams$/);
+        if (match && match[1]) {
+            // Clean up the meeting name (remove any extra spaces)
+            let meetingName = match[1].trim();
+            // Remove "Chat" if it's at the beginning of the meeting name
+            meetingName = meetingName.replace(/^Chat\s*\|\s*/, '');
+            return meetingName;
+        }
+        
+        // Fallback: try without the "Chat" part
+        const simpleMatch = title.match(/^([^|]+?)\s*\|\s*Microsoft Teams$/);
+        if (simpleMatch && simpleMatch[1]) {
+            return simpleMatch[1].trim();
+        }
+        
+        return null;
+    } catch (e) {
+        console.error('Error getting meeting name:', e);
+        return null;
+    }
+}
+
+
 function downloadFile(isAutoDownload = false) {
     // Force finalize any complete messages that haven't been processed yet
     capturedMessages.forEach((data, id) => {
@@ -178,14 +208,27 @@ function downloadFile(isAutoDownload = false) {
     
     const fileTimestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
     const prefix = isAutoDownload ? 'auto_' : '';
+    
+    // Get meeting name and create filename
+    let meetingName = getMeetingName();
+    let filename;
+    
+    if (meetingName) {
+        // Sanitize meeting name for filesystem (remove invalid characters)
+        const sanitizedName = meetingName.replace(/[<>:"/\\|?*]/g, '-').replace(/\s+/g, '_');
+        filename = `${prefix}teams_captions_${sanitizedName}_${fileTimestamp}.txt`;
+    } else {
+        filename = `${prefix}teams_captions_${fileTimestamp}.txt`;
+    }
+    
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${prefix}teams_captions_${fileTimestamp}.txt`;
+    a.download = filename;
     a.click();
     
     URL.revokeObjectURL(url);
     
-    console.log(`${isAutoDownload ? 'Auto-d' : 'D'}ownloaded ${deduped.length} captions`);
+    console.log(`${isAutoDownload ? 'Auto-d' : 'D'}ownloaded ${deduped.length} captions${meetingName ? ` from "${meetingName}"` : ''}`);
     
     // Clear captions after download if it was auto-download
     if (isAutoDownload) {

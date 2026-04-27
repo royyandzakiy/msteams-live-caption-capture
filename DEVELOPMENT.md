@@ -1,5 +1,6 @@
 ## Feature
 - add meeting title in the downloaded .txt filename
+- add autodownload if suddenly tab gets closed
 
 ## Bug Backlog
 - remove stored data cleanup logic entirely
